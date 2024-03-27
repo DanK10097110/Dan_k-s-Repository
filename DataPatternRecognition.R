@@ -4,19 +4,24 @@
 # is better because I(the software engineer) know exactly what is going on in the program,
 # and can thus make improvements through experimentation.
 
-# Note: The dataset being used is a simply fir testing purposes. In reality, the 
+# Note: The dataset being used is a simply for testing purposes. In reality, the 
 # algorithm will work on any dataset
 
 # Note: Additional software should be developed for time-series analysis, but for now
 # what is currently set is good enough for a surface level analysis.
 
+#### Note: This is built so that the target column is numeric ONLY
+
+setwd("C:/Users/DaGuest/Desktop/Coding/RProjects")
+
 library(tidyverse)
 library(sandwich)
 library(lmtest)
+library(rpart)
+library(rpart.plot)
 
+# Arbitrary data set
 df <- read.csv("https://raw.githubusercontent.com/paramshah4/data101_tutorial/main/files/dataset/Movies2022F-4-new.csv");
-
-# This is built so that the target column is numeric only
 
 regModel = LevelILinearReg(df, 3)  # Success!
 
@@ -42,11 +47,13 @@ subs <- list()
 lvlIVCount = 0
 moreSubbedData <- list()
 residuals0 <- list()
+actVals <- list()
+pastModels <- list()
 
+j1 = 0.995  # found to be most optimal through experimentation
 newDf <- newData$df
 
 # --------------------------------------------------------------------------
-
 LevelILinearReg <- function(df, n){
   # n is target column
   
@@ -57,7 +64,6 @@ LevelILinearReg <- function(df, n){
     SigVals = FeatureCollection(df, n, data$types)
     targetName = colnames(df)[n]
     bestFeatures = BestRegFeatures(SigVals, df, targetName)
-    print(bestFeatures)
     regModel = CreateLinearReg(df, n, bestFeatures)
     return(regModel)
   }
@@ -95,41 +101,55 @@ LevelIILinearReg <- function(df, n, a){
       newSmlNumsOfSubset = list()
       newBigNumsOfSubset = list()
       newSubsets = list()
+      oldSubs = list()
+      oldSubs1 = list()
+      oldBigNums = list()
+      oldSmlNums = list()
       print("Entering for loop in LevelII")
       for (i in 1:length(subsets)){
         subi = subsets[[i]]
         if(nrow(subi) > 1){
-          Values <- FeatureCollection(subi, n, varTypes)
-          if (!is.null(Values)){
-            FeatureVals = c(FeatureVals, list(Values))
-            features = BestRegFeatures(Values, subi, targetName)
-            newReg = CreateLinearReg(subi, n, features)
-            if(!is.null(newReg)){
-              regModels = c(regModels, list(newReg))
-              newSmlNumsOfSubset = c(newSmlNumsOfSubset, smlNumsOfSubset[[i]])
-              newBigNumsOfSubset = c(newBigNumsOfSubset, bigNumsOfSubset[[i]])
-              subi = ConvertVarsBack(subi, categories, varTypes)
-              newSubsets = c(newSubsets, list(subi))
+            bool = DecideToSubset(df, subi, n) # if the new regression is worse, on average, than original bool == false
+            subi = ConvertVarsBack(subi, categories, varTypes)
+            if (bool == FALSE){
+              print("OldReg was actually better than newReg in LVLII linReg")
+              oldSubs = rbind(oldSubs, subi)
+              newReg = -1
             }
-          }
+            else{
+              newReg = LevelILinearReg(subi, n)
+            }
+            regModels = c(regModels, list(newReg))
+            newSmlNumsOfSubset = c(newSmlNumsOfSubset, smlNumsOfSubset[[i]])
+            newBigNumsOfSubset = c(newBigNumsOfSubset, bigNumsOfSubset[[i]])
+            newSubsets = c(newSubsets, list(subi))
         }
         else{
-          print("Values is null in LevelII")
+          print("Subset is of length 0 in levelII")
         }
-        # count = count + 1
-        # newName = cat("This is the ", count, "th subset for column", a, " with num of df rows being: ", nrow(df))
-        # subNames = c(subnames, newName)
       }
-      LinRegModels <<- regModels
-      featVals <<- FeatureVals
-      subs <<- newSubsets
+  
+    if (!is.null(dim(oldSubs))){
+      newOldModel <- LevelILinearReg(oldSubs, n)
+    }
+    if(length(regModels) > 0){
+      for (i in 1:length(regModels)){
+        if (length(regModels[[i]]) == 1){
+          regModels[[i]] = newOldModel
+          newSubsets[[i]] = oldSubs
+        }
+      }
+    }
       
-      subsets = newSubsets
-      smlNumsOfSubset = newSmlNumsOfSubset
-      bigNumsOfSubset = newBigNumsOfSubset
-      
-      print("LevelII successful")
-      return(list("regModels" = regModels, "smlNumsOfSubset" = smlNumsOfSubset, "bigNumsOfSubset" = bigNumsOfSubset, "subsets" = subsets))
+    LinRegModels <<- regModels
+    subs <<- newSubsets
+    
+    subsets = newSubsets
+    smlNumsOfSubset = newSmlNumsOfSubset
+    bigNumsOfSubset = newBigNumsOfSubset
+    
+    print("LevelII successful")
+    return(list("regModels" = regModels, "smlNumsOfSubset" = smlNumsOfSubset, "bigNumsOfSubset" = bigNumsOfSubset, "subsets" = subsets))
     }
     else{
       print("AutoSubset returned null in LevelII")
@@ -150,28 +170,34 @@ LevelIIILinearReg <- function(df, n){
   minRMSE = 1000
   bestSubsetNum = -10
   bestSubData = list()
-  trainTest = randomSplitDataFrame(df)
-  trainData = trainTest$train_data
-  testData = trainTest$test_data
-  testData1 = ConvertAllVars(testData)
-  testData = testData1$df
-  testData10 <<- testData
   for (i in seq_along(df)){
     if (i != n){
-      subData = LevelIILinearReg(trainData, n, i)
-      if(!is.null(subData)){
-        print("Subdata in LevelIII lin reg found")
-        newRMSE = RegComboAccuracy(testData, subData, n, i)
-        cat("new RMSE in Lvl 3 is", newRMSE, "\n")
-        if (!is.null(newRMSE) && !is.na(newRMSE)){
-          if (newRMSE < minRMSE){
-            minRMSE = newRMSE
-            bestSubsetNum = i
-          }
+      avgNewRMSE = 0
+      count = 0
+      for (j in 1:3){
+        trainTest = randomSplitDataFrame(df)
+        trainData = trainTest$train_data
+        testData = trainTest$test_data
+        testData1 = ConvertAllVars(testData)
+        testData = testData1$df
+        testData10 <<- testData
+        subData = LevelIILinearReg(trainData, n, i)
+        if(!is.null(subData)){
+          newRMSE = RegComboAccuracy(testData, subData, n, i)
+          avgNewRMSE = avgNewRMSE + newRMSE
+          count = count + 1
         }
-        else{
-          print("NewRMSE not found in Level 3 lin reg")
+      }
+      avgNewRMSE = avgNewRMSE/count
+      cat("new RMSE in Lvl 3 is", avgNewRMSE, "\n")
+      if (!is.null(avgNewRMSE) & !is.na(avgNewRMSE)){
+        if (avgNewRMSE < minRMSE){
+          minRMSE = avgNewRMSE
+          bestSubsetNum = i
         }
+      }
+      else{
+        print("NewRMSE not found in Level 3 lin reg")
       }
     }
   }
@@ -200,28 +226,59 @@ LevelIVLinearReg <- function(df, n, subsettedColumn = -1){
     if (!is.null(bestSubbedData1)){
       newRMSE = bestSubbedData1$minRMSE
       oldRMSE = OrigRegAccuracy(df, n)
-      if ((oldRMSE*0.98) > newRMSE){   # 0.98 allows a 2% margin of randomness
+      if ((oldRMSE*0.99) > newRMSE){   # allows for slight margin of randomness
         print("oldRMSE was bigger than newRMSE")
-        cat("oldRMSE:", oldRMSE, "newRMSE:", newRMSE, "\n")
+        cat("old RMSE:", oldRMSE, "new RMSE:", newRMSE, "\n")
         subData = bestSubbedData1$bestSubData
         bestNum = bestSubbedData1$bestSubsetNum
         subsets = subData$subsets
         bestSubbedDataFinal = list(list(regModels = subData$regModels, smlNumsOfSubset = subData$smlNumsOfSubset, bigNumsOfSubset = subData$bigNumsOfSubset, columnIndex = bestNum, newRMSE = newRMSE))
         bestSubbedDataFinal1 <<- bestSubbedDataFinal
+        pastRegModels = list()
         if (!is.null(length(subsets))){
-          for (subi in subsets){
-            furtherSubbedData <- LevelIVLinearReg(subi, n, subsettedColumn = bestNum)
-            bestSubbedDataFinal = c(bestSubbedDataFinal, list(furtherSubbedData))
+          for (i in 1:length(subsets)){
+            subi = subsets[[i]]
+            model = subData$regModels[[i]]
+            clear = FALSE
+            pastModels <<- pastRegModels
+            if(length(pastRegModels) > 1){
+              for (j in 1:length(pastRegModels)){
+                mod = pastRegModels[[1]]
+                if (mod$coefficients[[1]] == model$coefficients[[1]] & length(mod$coefficients) == length(model$coefficients)){
+                  clear = TRUE
+                }
+              }
+            }
+            else if(length(pastRegModels) == 1){
+              mod = pastRegModels[[1]]
+              if (mod$coefficients[[1]] == model$coefficients[[1]] & length(mod$coefficients) == length(model$coefficients)){
+                clear = TRUE
+              }
+            }
+            else{
+              pastRegModels = c(pastRegModels, list(model))
+            }
+            if (clear == FALSE){
+              print("clear is false")
+              pastRegModels <- c(pastRegModels, list(model))
+              furtherSubbedData <- LevelIVLinearReg(subi, n, subsettedColumn = bestNum)
+              bestSubbedDataFinal = c(bestSubbedDataFinal, list(furtherSubbedData))
+              bestSubbedDataFinal1 = c(bestSubbedDataFinal1, list(furtherSubbedData))
+            }
+            else{
+              print("clear is true")
+              bestSubbedDataFinal1 = c(bestSubbedDataFinal1, list(bestSubbedDataFinal[[j]]))
+            }
           }
           print("Level IV successful")
-          return(bestSubbedDataFinal)
+          return(bestSubbedDataFinal1)
         }
       }
       else{
 
         bestSubbedDataFinal = list(regModel = LevelILinearReg(df, n), RMSE = oldRMSE)
 
-        print("Reached a leaf node and returned a its regression")
+        print("Reached a leaf node and returned its regression")
         return(list(bestSubbedDataFinal))
       }
   }
@@ -237,6 +294,16 @@ LevelIVLinearReg <- function(df, n, subsettedColumn = -1){
 }
 
 # -------------------------------------------------------------------------
+
+BestFinalTree <- function(df, n){
+  # This method runs the level 4 regression tree until it finds the most optimal possible tree.
+  # Because of the randomness introduced by splitting the dataframe, each tree is different, and
+  # thus, the best way to find the best tree is through trial and error.
+  
+  # Although, if averages were taken to reduce the margin of error on each step of the process,
+  # the program would only have to run once as each RMSE will approach the true RMSE and 
+  # reveal whether or not a specific thing should be done with certainty
+}
 
 FinalComboPredictionModel <- function(newData, FinalRegressionTree){
   # This will decide which of the seperate regressions will be used for a prediction
@@ -308,11 +375,11 @@ IntervalOfInterest <- function(smlNumsOfSubset, bigNumsOfSubset, a, newData){
   item1 <<- item
   for (i in seq_along(smlNumsOfSubset)){
     if (i == length(smlNumsOfSubset)){
-      bigNumsOfSubset[[i]] = abs(bigNumsOfSubset[[i]])+1000 #to account for anything higher than max of the dataframe
+      bigNumsOfSubset[[i]] = abs(bigNumsOfSubset[[i]])*100+1000 #to account for anything higher than max of the dataframe
     }
     else if(i == 1){
       smlNums1 <<- smlNumsOfSubset
-      smlNumsOfSubset[[i]] = -abs(smlNumsOfSubset[[i]])-1000 #to account for anything lower than min of the dataframe
+      smlNumsOfSubset[[i]] = -abs(smlNumsOfSubset[[i]])*100-1000 #to account for anything lower than min of the dataframe
     }
     if (item > smlNumsOfSubset[[i]] && item <= bigNumsOfSubset[[i]]){
       numOfInterval = i
@@ -322,17 +389,61 @@ IntervalOfInterest <- function(smlNumsOfSubset, bigNumsOfSubset, a, newData){
   return(list("numOfInterval" = numOfInterval, "count" = count))
 }
 
+DecideToSubset <- function(df, subi, n){
+  # decides whether or not to utilize this specific subset
+  # n is target index
+  data = ConvertAllVars(df)
+  df = data$df
+  data = ConvertAllVars(subi)
+  subi = data$df
+  sum1 = 0
+  sum2 = 0
+  count = 0
+  for (i in 1:3){
+    trainTest = randomSplitDataFrame(subi)
+    trainData = trainTest$train_data
+    testData = trainTest$test_data
+    newReg = LevelILinearReg(trainData, n)
+    rows = as.numeric(row.names(testData))
+    df = df[-rows,0]                  # gets rid of all data in test data
+    oldReg = LevelILinearReg(df, n)
+    predictions1 = predict(newReg, testData)
+    predictions2 = predict(oldReg, testData)
+    actualVals = df[,n]
+    RMSE1 = CalculateRMSE(predictions1, actualVals)
+    RMSE2 = CalculateRMSE(predictions2, actualVals)
+    sum1 = sum1 + RMSE1
+    sum2 = sum2 + RMSE2
+    count = count + 1
+  }
+  avg1 = sum1/count
+  avg2 = sum2/count
+  if (avg1 < avg2*j1){   # global j1 to account for (1-j1)% randomness (optimized)
+    return(TRUE)
+  }
+  else{
+    return(FALSE)
+  }
+}
+
 OrigRegAccuracy <- function(df, n){
-  trainTest = randomSplitDataFrame(df)
-  trainData = trainTest$train_data
-  testData = trainTest$test_data
-  model = LevelILinearReg(trainData, n)
-  testData1 = ConvertAllVars(testData)
-  testData = testData1$df
-  predictions = predict(model, testData)
-  actualVals = testData[,n]
-  RMSE = CalculateRMSE(predictions, actualVals)
-  return(RMSE)
+  sum = 0
+  count = 0
+  for (i in 1:5){
+    trainTest = randomSplitDataFrame(df)
+    trainData = trainTest$train_data
+    testData = trainTest$test_data
+    model = LevelILinearReg(trainData, n)
+    testData1 = ConvertAllVars(testData)
+    testData = testData1$df
+    predictions = predict(model, testData)
+    actualVals = testData[,n]
+    RMSE = CalculateRMSE(predictions, actualVals)
+    sum = sum + RMSE
+    count = count + 1
+  }
+  avgRMSE = sum/count
+  return(avgRMSE)
 }
 
 RegComboAccuracy <- function(testData, subsetData, n, i){
@@ -430,8 +541,8 @@ AutoSubset <- function(df, a, cats, type) {
     bigNum = max(df[,a])
     range1 = bigNum-smlNum
     items = unique(df[,a])
-    if (range1 > 0){
-      if (length(items) <= 10 || type[a] == "Categorical") {
+    if (range1 > 0 & nrow(df) > 100){
+      if (length(items) <= 7 || type[a] == "Categorical") {
         print("entering first loop of autosubset")
         for (i in 1:length(items)) {
           subsets <- c(subsets, list(df[which(df[, a] == items[i]), ]))
@@ -445,7 +556,7 @@ AutoSubset <- function(df, a, cats, type) {
         }
       }
       else{
-        lenOfInters <- range1/ 10
+        lenOfInters <- range1/10
         print("entering second loop of autosubset")
         for (i in 1:10) {
           b <- i * lenOfInters
@@ -458,7 +569,7 @@ AutoSubset <- function(df, a, cats, type) {
       return(list(subsets, smlNumsOfSubset, bigNumsOfSubset))
     }
     else{
-      print("range of values is <= 0")
+      print("range of values is <= 0 or length of dataframe < 100")
       # cat("categories in Autosubset is", cats,"\n")
       return(NULL)
     }
@@ -505,6 +616,7 @@ BestRegFeatures <- function(feature_list, dataframe, targetName) {
     if (q[1] > 0){
       sorted_features <- feature_list[order(feature_list$t_values, decreasing = TRUE), ]
       SigVals <<- sorted_features
+      lenOfFeatures <- length(sorted_features)
       LinRegFactors <- list()  # Initialize an empty list to store significant features
       count = 1   # dictates the gap between checking significance of values in the regression
       num = count
@@ -513,7 +625,7 @@ BestRegFeatures <- function(feature_list, dataframe, targetName) {
         if (multiColinear == FALSE){
           LinRegFactors <- c(LinRegFactors, feat)
           if (count == num){
-            LinRegFactors <- CheckSigOfFeatures(LinRegFactors, dataframe, targetName)
+            LinRegFactors <- CheckSigOfFeatures(LinRegFactors, dataframe, targetName, lenOfFeatures)
             count = 0
             # print(LinRegFactors)
           }
@@ -523,6 +635,7 @@ BestRegFeatures <- function(feature_list, dataframe, targetName) {
         }
       }
     RegFeatures <<- LinRegFactors
+    # cat("length of LinRegFactors is:", length(LinRegFactors), ".\n")
     return(LinRegFactors)
     }
   }
@@ -538,15 +651,15 @@ CheckMultiColinearity <- function(df, LinRegFactors, feat){
     # print(summary(model1))
     if (length(summary(model1)$coefficients["Std. Error"]) == 2){
     std <- summary(model1)$coefficients[2, "Std. Error"]
-    if (std < 0.0001){
-      return(TRUE)
-    }
+      if (std < 0.0001){
+        return(TRUE)
+      }
     }
   }
   return(FALSE)
 }
 
-CheckSigOfFeatures <- function(LinRegFactors, df, targetName){
+CheckSigOfFeatures <- function(LinRegFactors, df, targetName, lenOfFeatures){
   len = length(LinRegFactors)
   if (len != 0){
     formulaStr1 = paste(targetName, "~", paste(LinRegFactors, collapse = " + "))
@@ -559,7 +672,7 @@ CheckSigOfFeatures <- function(LinRegFactors, df, targetName){
         pVal <- summary(model1)$coefficients[i+1, "Pr(>|t|)"]
         # print(pVal)
         if(!is.null(pVal) & !is.na(pVal)){
-          if (pVal < 0.05){
+          if (pVal < 0.05/(lenOfFeatures*(lenOfFeatures-1)/2)){  # checks significance of finding
             newFactors <- c(newFactors, LinRegFactors[[i]])
           }
         }
@@ -595,7 +708,7 @@ ConvertVarsBack <- function(df1, categories, types){
       # print("Yay")
     }
   }
-  print("Vars converted back")
+  # print("Vars converted back")
   return(df1)
 }
 
@@ -627,7 +740,7 @@ ConvertAllVars <- function(df){
       categories <- c(categories, list(0))
     }
   }
-  print("Df has been Converted!")
+  # print("Df has been Converted!")
   newCats2 <<- categories
   return(list("df" = df, "categories" = categories, "types" = types))
 }
@@ -752,7 +865,6 @@ FeatureCollection <- function(df, n, varTypes) {
     SigVals <- ExponentialVars(df, n, SigVals, varTypes)
     SigVals <- RatioVars(df, n, SigVals, varTypes)
     # print("Features collected")
-    cat("Dim of SigVals is:", dim(SigVals), ".\n")
     return(SigVals)
   }
   else {
@@ -760,8 +872,6 @@ FeatureCollection <- function(df, n, varTypes) {
     return(NULL)
   }
 }
-
-SigVals <- LogarithmicVars(newDf, 2, SigVals, types1)
 
 LogarithmicVars <- function(df, a, SigVals, varTypes) {
   # This function goes through correlation of logarithmic variables
@@ -850,13 +960,13 @@ RatioVars <- function(df, a, SigVals, varTypes){
 
 SigTest <- function(target, features){
   linReg <- lm(target ~ features)
-  if (length(summary(linReg)$coefficients[, "t value"]) > 1 & !is.null(linReg)){
+  if (!is.null(linReg) & length(summary(linReg)$coefficients[, "t value"]) > 1){
     tVal <- summary(linReg)$coefficients[2, "t value"]
     tVal = abs(tVal)
     return(tVal)
   }
   else{
-    print("Something wrong in SigTest")
+    # print("Something wrong in SigTest")
     return(NULL)
   }
 }
@@ -864,18 +974,46 @@ SigTest <- function(target, features){
 UpdateSigVals <- function(feature, tStat, SigVals) {
   feature <- as.character(feature)
   tStat <- as.numeric(tStat)
-  if(!is.null(feature) && !is.null(tStat) && !is.na(feature) && !is.na(tStat)){
-    newItem <- data.frame("feature" = feature, "t_values" = tStat)
-    SigVals <- rbind(SigVals, newItem)
-    # cat("new SigVals length: ", nrow(SigVals), "\n")
-    # cat("new SigVals dim: ", dim(SigVals), "\n")
-    # cat("tStat now:", tStat, ".\n")
-    return(SigVals)
+  if (length(feature)>0 & length(tStat)>0){
+    if(!is.null(feature) & !is.null(tStat) & !is.na(feature) & !is.na(tStat)){
+      newItem <- data.frame("feature" = feature, "t_values" = tStat)
+      SigVals <- rbind(SigVals, newItem)
+      # cat("new SigVals length: ", nrow(SigVals), "\n")
+      # cat("new SigVals dim: ", dim(SigVals), "\n")
+      # cat("tStat now:", tStat, ".\n")
+      return(SigVals)
+    }
+    else{
+      print("Null value in updateSigVals")
+      cat("feature:",feature,"\n")
+      cat("tStat:",tStat,"\n")
+    }
   }
-  else{
-    print("Null value in updateSigVals")
-    cat("feature:",feature,"\n")
-    cat("tStat:",tStat,"\n")
-    return(NULL)
-  }
+  return(NULL)
+  
 }
+
+# ------------------------------------------------------------------------------
+
+# Optimizing j1 for Decide to subset function
+
+# totalMinRMSE = 1000
+# rmseNum = -1
+# j1 = 0.95
+# 
+# for (i in  seq(0.96, 1.00, by = 0.01)){
+#   avg = 0
+#   count = 0
+#   for (j in 1:3){
+#     j1 = i
+#     regModels3 = LevelIIILinearReg(df, 3)
+#     rmse = regModels3$minRMSE
+#     avg = avg+rmse
+#     count = count + 1
+#   }
+#   avg = avg/count
+#   if (totalMinRMSE > avg){
+#     totalMinRMSE = avg
+#     rmseNum = i
+#   }
+# }
